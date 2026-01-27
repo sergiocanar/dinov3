@@ -19,3 +19,4 @@ dist/
 
 #Project specific ignores
 *.pth
+data/

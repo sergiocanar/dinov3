@@ -8,6 +8,7 @@ from enum import Enum
 from typing import List, Optional, Union
 from urllib.parse import urlparse
 from pathlib import Path
+from collections import OrderedDict
 
 import torch
 
@@ -135,6 +136,9 @@ def _make_dinov3_vit(
                 weights=weights,
                 hash=hash,
             )
+        elif type(weights) is OrderedDict:
+            model.load_state_dict(weights, strict=True)
+            return model
         else:
             url = convert_path_or_url_to_url(weights)
         state_dict = torch.hub.load_state_dict_from_url(url, map_location="cpu", check_hash=check_hash)
