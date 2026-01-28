@@ -25,3 +25,13 @@ def join_coco_json(json_lt: list[str], save_dir:str)->None:
 
     save_json(combined_data, save_dir)
     print(f"Combined {len(json_lt)} COCO JSON files into {save_dir}")
+
+def load_txt(path: str) -> str:
+    '''Load a text file and return its contents as a list.'''
+    
+    data = []
+    with open(path, 'r') as f:
+        for line in f:
+            data.append(line.strip())
+        
+    return data
