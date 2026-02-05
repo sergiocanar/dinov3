@@ -14,8 +14,8 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchmetrics.classification import MultilabelAveragePrecision
 
-import torchvision.transforms.functional as TF
 from tqdm import tqdm
+import torchvision.transforms.functional as TF
 
 
 def DinoCVS_parser():
@@ -23,6 +23,7 @@ def DinoCVS_parser():
     parser.add_argument("--mode", type=str, choices=["train", "test"], default="train", help="Mode: train or test")
     
     return parser
+
 
 # ----------------------------
 # Config
@@ -39,11 +40,13 @@ DINOV3_GITHUB_LOCATION = "facebookresearch/dinov3"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-BATCH_SIZE = 64
+BATCH_SIZE = 12
 NUM_EPOCHS = 10
-LR = 1e-3
-WEIGHT_DECAY = 1e-4
-NUM_WORKERS = 4
+LR_BACKBONE = 5e-6
+LR_HEAD = 1e-3
+WD_BACKBONE = 0.05
+WD_HEAD = 1e-4
+NUM_WORKERS = 8
 
 
 # If you know exact blocks, set it; otherwise we try to infer.
@@ -130,7 +133,7 @@ class CVSHead(nn.Module):
 # ----------------------------
 # Load DINOv3
 # ----------------------------
-def load_dinov3():
+def load_dinov3(train_encoder: bool = True):
     source = "local" if DINOV3_LOCATION != DINOV3_GITHUB_LOCATION else "github"
     repo_or_dir = DINOV3_LOCATION if source == "local" else DINOV3_GITHUB_LOCATION
 
@@ -138,17 +141,23 @@ def load_dinov3():
         repo_or_dir=repo_or_dir,
         model=MODEL_NAME,
         source=source,
-    )
-    model.eval().to(DEVICE)
-    for p in model.parameters():
-        p.requires_grad = False  # frozen encoder
+    ).to(DEVICE)
+
+    if train_encoder:
+        model.train()
+        for p in model.parameters():
+            p.requires_grad = True
+    else:
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad = False
+
     return model
 
 
 # ----------------------------
 # Feature extraction (no masks): global average pool over patch features
 # ----------------------------
-@torch.no_grad()
 def batch_to_embeddings(dinov3_model, images_pil: List[Image.Image], n_layers: int) -> torch.Tensor:
     """
     Returns (B, D) embeddings using last-layer patch feature map average pooling.
@@ -233,20 +242,24 @@ def evaluate(
 
 
 def train_one_epoch(dinov3_model, head, loader, optimizer, criterion, n_layers: int):
+    dinov3_model.train()
     head.train()
     total_loss = 0.0
 
     for imgs, y in tqdm(loader, desc="Train", leave=False):
         y = y.to(DEVICE)
 
-        with torch.no_grad():
-            emb = batch_to_embeddings(dinov3_model, imgs, n_layers=n_layers)
-
+        emb = batch_to_embeddings(dinov3_model, imgs, n_layers=n_layers)
         logits = head(emb)
         loss = criterion(logits, y)
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(
+            list(dinov3_model.parameters()) + list(head.parameters()),
+            max_norm=1.0
+        )
         optimizer.step()
 
         total_loss += float(loss.item()) * y.size(0)
@@ -257,8 +270,8 @@ def train_one_epoch(dinov3_model, head, loader, optimizer, criterion, n_layers: 
 # ----------------------------
 # Main
 # ----------------------------
-def main(train_csv: str, val_csv: str, train_or_test: str = "train"):
-    dinov3_model = load_dinov3()
+def main(train_csv: str, val_csv: str, train_encoder: bool,train_or_test: str = "train"):
+    dinov3_model = load_dinov3(train_encoder=train_encoder)
     n_layers = MODEL_TO_NUM_LAYERS.get(MODEL_NAME, 12)
 
     # Infer D
@@ -269,8 +282,10 @@ def main(train_csv: str, val_csv: str, train_or_test: str = "train"):
     
     head = CVSHead(d_in=d_in, hidden=512).to(DEVICE)
     if train_or_test == "test":
-        checkpoint = torch.load("dinov3_cvs_baseline_nomask.pth", map_location=DEVICE)
-        head.load_state_dict(checkpoint["head"])
+        ckpt = torch.load("dinov3_cvs_finetuned.pth", map_location=DEVICE)
+        dinov3_model.load_state_dict(ckpt["dinov3"], strict=True)
+        head.load_state_dict(ckpt["head"], strict=True)
+        dinov3_model.eval()
         head.eval()
 
         val_ds = CVSBaselineDataset(val_csv)
@@ -293,7 +308,12 @@ def main(train_csv: str, val_csv: str, train_or_test: str = "train"):
                                 num_workers=NUM_WORKERS, collate_fn=collate_fn)
 
         criterion = nn.BCEWithLogitsLoss()
-        optimizer = torch.optim.AdamW(head.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": dinov3_model.parameters(), "lr": LR_BACKBONE, "weight_decay": WD_BACKBONE},
+                {"params": head.parameters(), "lr": LR_HEAD, "weight_decay": WD_HEAD},
+            ]
+        )
 
         best_ap = -1.0
         for epoch in range(NUM_EPOCHS):
@@ -304,12 +324,15 @@ def main(train_csv: str, val_csv: str, train_or_test: str = "train"):
 
             if ap > best_ap:
                 best_ap = ap
-                torch.save({"head": head.state_dict(),
-                            "model_name": MODEL_NAME,
-                            "d_in": d_in,
-                            "n_layers": n_layers},
-                        "dinov3_cvs_baseline_nomask.pth")
-                print(f"[INFO] Saved best: dinov3_cvs_baseline_nomask.pth (macroF1={best_ap:.4f})")
+                torch.save(
+                    {
+                        "head": head.state_dict(),
+                        "dinov3": dinov3_model.state_dict(),
+                        "model_name": MODEL_NAME,
+                        "n_layers": n_layers,
+                    },
+                    "dinov3_cvs_finetuned.pth"
+                )
 
 
 if __name__ == "__main__":
