@@ -144,6 +144,7 @@ def _make_dinov3_vit(
         state_dict = torch.hub.load_state_dict_from_url(url, map_location="cpu", check_hash=check_hash)
         model.load_state_dict(state_dict, strict=True)
     else:
+        print(f"Model initiated random weights...")
         model.init_weights()
     return model
 
