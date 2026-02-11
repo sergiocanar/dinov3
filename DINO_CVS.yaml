@@ -1,0 +1,21 @@
+program: main.py
+method: bayes
+metric:
+  name: eval/mAP
+  goal: maximize
+
+parameters:
+  lr:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 3e-4
+  head_type:
+    values: ["mlp", "transformer"]
+
+command:
+  - ${env}
+  - CUDA_VISIBLE_DEVICES=2
+  - python
+  - ${program}
+  - ${args}
+  - "--wandb"
