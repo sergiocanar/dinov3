@@ -20,3 +20,5 @@ dist/
 #Project specific ignores
 *.pth
 data/
+outputs/
+wandb/
