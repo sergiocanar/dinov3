@@ -102,7 +102,7 @@ class SurgicalDINOForCVS(nn.Module):
         tf_dropout=0.1,
         img_size=224,               # needed to know number of patch tokens
         patch_size=16,              # dinov3 is ViT-16
-        weights_dir=None
+        weights_dir:str=None
         ):
         super().__init__()
         
@@ -255,13 +255,16 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     surgicaldino = SurgicalDINOForCVS(
-        backbone_size="base",
+        backbone_size="large",
         head_type="transformer",      # or "transformer"
         use_layers="4",
-        weights_dir="/home/scanar/endovis/models/dinov3/weights/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth"
+        weights_dir="/home/scanar/endovis/models/dinov3/weights/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
     ).to(device)
 
     surgicaldino.train()
+    
+    num_params = sum(p.numel() for p in surgicaldino.parameters())
+    print(num_params)
 
     x = torch.randn(2, 3, 224, 224, device=device)
     y = torch.randint(0, 2, (2, 3), device=device)  # multi-label (B,3) in {0,1}

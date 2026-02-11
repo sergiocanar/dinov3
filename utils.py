@@ -1,5 +1,6 @@
 import os 
 from os.path import join as path_join
+import torch
 
 import json
 
@@ -35,3 +36,38 @@ def load_txt(path: str) -> str:
             data.append(line.strip())
         
     return data
+
+def cvs_dino_collator(batch):
+    # batch items: (img, label, video_name, frame_id, metadata)
+    imgs = []
+    labels = []
+    video_names = []
+    frame_ids = []
+
+    for img, label, video_name, frame_id, metadata in batch:
+
+        imgs.append(img)
+        labels.append(label)
+        video_names.append(video_name)
+        frame_ids.append(int(frame_id))
+
+    pixel_values = torch.stack(imgs, dim=0)                 # (B,3,224,224)
+    labels = torch.stack(labels, dim=0).float()             # (B,3) for BCEWithLogitsLoss
+
+    return {
+        "pixel_values": pixel_values,
+        "labels": labels,
+        # optional but handy; keep remove_unused_columns=False
+        "video_name": video_names,
+        "frame_id": torch.tensor(frame_ids, dtype=torch.long),
+    }
+
+def cvs_data_collator(batch, feature_extractor):
+    images = [img for img, label, video_name, frame_id, metadata in batch]
+    labels = torch.stack([label for img, label, video_name, frame_id, metadata in batch], dim=0)   # [B, 3]
+
+    enc = feature_extractor(images, return_tensors="pt")
+    pixel_values = enc["pixel_values"]  # [B, 3, 224, 224]
+
+    # Return only what the model forward expects:
+    return {"pixel_values": pixel_values, "labels": labels}
