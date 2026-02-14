@@ -5,12 +5,14 @@ metric:
   goal: maximize
 
 parameters:
+  weight_decay:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 5e-4
   lr:
     distribution: log_uniform_values
     min: 1e-5
     max: 3e-4
-  head_type:
-    values: ["mlp", "transformer"]
 
 command:
   - ${env}
