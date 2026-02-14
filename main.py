@@ -1,7 +1,6 @@
 import os
 from os.path import join as path_join
 
-
 import wandb
 import argparse
 import numpy as np
@@ -30,21 +29,24 @@ def cvs_data_collator(batch, feature_extractor):
 
 @torch.no_grad()
 def make_predictions_json(trainer, dataset, out_path, split_name="test", threshold=0.5):
-    """
-    Saves per-sample predictions:
-      video_name, frame_id, logits, probs, pred (0/1), label (0/1)
-    """
     pred = trainer.predict(test_dataset=dataset)
     logits = pred.predictions
     labels = pred.label_ids
 
-    probs = 1 / (1 + np.exp(-logits[0]))  # sigmoid
+    # unwrap if needed
+    if isinstance(logits, (tuple, list)):
+        logits = logits[0]
+
+    # probs: (N,C)
+    probs = 1 / (1 + np.exp(-logits))
     preds = (probs >= threshold).astype(int)
+
+    # IMPORTANT: if labels are soft, binarize for "label"
+    labels = np.asarray(labels)
+    labels_bin = (labels >= 0.5).astype(int)
 
     records = []
     for i in range(len(dataset)):
-        # IMPORTANT: This assumes your dataset returns:
-        # (img, label, video_name, frame_id, meta)
         img, label_t, video_name, frame_id, meta = dataset[i]
         records.append({
             "split": split_name,
@@ -52,11 +54,17 @@ def make_predictions_json(trainer, dataset, out_path, split_name="test", thresho
             "frame_id": int(frame_id),
             "probs": probs[i].tolist(),
             "pred": preds[i].tolist(),
-            "label": labels[i].astype(int).tolist(),
+
+            # for your evaluator (expects 0/1):
+            "label": labels_bin[i].tolist(),
+
+            # optional but recommended (so Brier vs soft target works):
+            "confidence_aware_label": labels[i].tolist(),
         })
 
     save_json(records, out_path)
     print(f"Saved json to: {out_path}")
+
 
 
 # -------------------------
@@ -80,13 +88,20 @@ def multilabel_map_torch(probs: torch.Tensor, labels: torch.Tensor) -> float:
 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
-    
+
     if isinstance(logits, (tuple, list)):
         logits = logits[0]
-    probs = torch.sigmoid(torch.tensor(logits))
-    labels_t = torch.tensor(labels).int()
-    mAP = multilabel_map_torch(probs, labels_t)
-    return {"mAP": mAP}
+
+    # probs: (N, C)
+    logits_t = torch.as_tensor(logits, dtype=torch.float32)
+    probs = torch.sigmoid(logits_t)
+
+    # labels may be soft in [0,1]. For AP, convert to hard {0,1}
+    labels_t = torch.as_tensor(labels, dtype=torch.float32)
+    labels_bin = (labels_t >= 0.5).to(torch.int32)
+
+    mAP = multilabel_map_torch(probs, labels_bin)
+    return {"mAP": float(mAP)}
 
 
 # -------------------------
@@ -97,8 +112,8 @@ def build_parser():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--epochs", type=int, default=20)
     p.add_argument("--batch_size", type=int, default=32)
-    p.add_argument("--num_workers", type=int, default=8)
-    p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--num_workers", type=int, default=16)
+    p.add_argument("--lr", type=float, default=0.0000021963079706746)
     p.add_argument("--weight_decay", type=float, default=5e-4)
 
     p.add_argument("--run_name", type=str, default="run1")
@@ -110,16 +125,17 @@ def build_parser():
     # Model knobs
     p.add_argument("--backbone_size", type=str, default="large", choices=["small","base","large","giant"])
     p.add_argument("--use_layers", type=str, default="4", choices=["1","4"])
-    p.add_argument("--head_type", type=str, default="mlp", choices=["mlp","transformer"])
+    p.add_argument("--head_type", type=str, default="transformer", choices=["mlp","transformer"])
     p.add_argument("--lora_r", type=int, default=4)
     p.add_argument("--img_size", type=int, default=224)
     p.add_argument("--patch_size", type=int, default=14)
 
     # Transformer head knobs (only used if head_type=transformer)
-    p.add_argument("--tf_depth", type=int, default=2)
+    p.add_argument("--tf_depth", type=int, default=1)
+    p.add_argument("--n_queries", type=int, default=2)
     p.add_argument("--tf_heads", type=int, default=8)
     p.add_argument("--tf_dropout", type=float, default=0.1)
-    p.add_argument("--tf_mlp_ratio", type=int, default=4)
+    p.add_argument("--tf_mlp_ratio", type=int, default=2)
 
     # Predictions output
     p.add_argument("--pred_threshold", type=float, default=0.5)
@@ -145,13 +161,15 @@ def main(parser: argparse.ArgumentParser, main_dir: str, data_dir: str, weights_
         safe_run_name = run_name.replace("/", "_")
         safe_run_name = wandb.run.name
         lr = float(wandb.config.lr)
-        head_type = str(wandb.config.head_type)
-
+        weight_decay = float(wandb.config.weight_decay)
+        head_type = "transformer"
     else:
         os.environ["WANDB_DISABLED"] = "true"
         safe_run_name = args.run_name
         lr = args.lr
-        head_type = args.head_type
+        head_type = "transformer"
+        weight_decay = float(wandb.config.weight_decay)
+        
 
     output_dir = path_join(main_dir, "outputs", "DINO_CVS", safe_run_name)
     logging_dir = path_join(output_dir, "logs")
@@ -242,7 +260,7 @@ def main(parser: argparse.ArgumentParser, main_dir: str, data_dir: str, weights_
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         learning_rate=lr,
-        weight_decay=args.weight_decay,
+        weight_decay=weight_decay,
         eval_strategy=eval_strategy,
         save_strategy="epoch",
         logging_strategy="steps",

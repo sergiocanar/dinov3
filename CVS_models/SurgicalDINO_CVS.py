@@ -9,7 +9,79 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class AttnPoolHead(nn.Module):
+    """
+    Attention pooling head for global image understanding.
 
+    Input:
+        patch_tokens: (B, N, D)  -- patch tokens from ViT (no CLS)
+    Output:
+        logits: (B, num_labels)
+    """
+    def __init__(
+        self,
+        d_model: int,
+        num_labels: int,
+        n_queries: int = 4,
+        nheads: int = 8,
+        depth: int = 2,
+        dropout: float = 0.1,
+        mlp_ratio: float = 4.0,
+        add_final_mlp: bool = True,
+    ):
+        super().__init__()
+        self.n_queries = n_queries
+        self.d_model = d_model
+        self.num_labels = num_labels
+
+        # Learned global "summary" tokens (queries)
+        self.queries = nn.Parameter(torch.randn(1, n_queries, d_model) * 0.02)
+
+        # TransformerDecoder = cross-attention (queries attend to patch tokens)
+        layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=nheads,
+            dim_feedforward=int(d_model * mlp_ratio),
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+            activation="gelu",
+        )
+        self.decoder = nn.TransformerDecoder(layer, num_layers=depth)
+
+        self.norm = nn.LayerNorm(d_model)
+
+        # classifier
+        if add_final_mlp:
+            self.classifier = nn.Sequential(
+                nn.Linear(d_model * n_queries, d_model),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_model, num_labels),
+            )
+        else:
+            self.classifier = nn.Linear(d_model * n_queries, num_labels)
+
+        # init (nice-to-have)
+        nn.init.trunc_normal_(self.queries, std=0.02)
+
+    def forward(self, patch_tokens: torch.Tensor) -> torch.Tensor:
+        """
+        patch_tokens: (B, N, D)
+        """
+        B, N, D = patch_tokens.shape
+        assert D == self.d_model, f"Expected D={self.d_model}, got {D}"
+
+        # Expand learned queries for the batch
+        q = self.queries.expand(B, -1, -1)  # (B, Q, D)
+
+        # Cross-attend: queries (tgt) attend to patch tokens (memory)
+        z = self.decoder(tgt=q, memory=patch_tokens)  # (B, Q, D)
+
+        # Pool: flatten all Q summary tokens
+        z = self.norm(z).reshape(B, self.n_queries * self.d_model)  # (B, Q*D)
+
+        return self.classifier(z)
     
 class _LoRA_qkv(nn.Module):
     def __init__(self, qkv, linear_a_q, linear_b_q, linear_a_v, linear_b_v):
@@ -101,7 +173,7 @@ class SurgicalDINOForCVS(nn.Module):
         tf_mlp_ratio=4,
         tf_dropout=0.1,
         img_size=224,               # needed to know number of patch tokens
-        patch_size=16,              # dinov3 is ViT-16
+        patch_size=16,              # dinov3 is ViT-16. Ill have 14 patches at 224x224
         weights_dir:str=None
         ):
         super().__init__()
@@ -188,16 +260,17 @@ class SurgicalDINOForCVS(nn.Module):
             # number of patch tokens for ViT-14: (H/14)*(W/14)
             H = img_size // patch_size
             W = img_size // patch_size
-            n_tokens = H * W
+            self.n_tokens_expected = H * W  # for debug only
 
-            self.head = PatchTransformerHead(
-                d_model=self.dim,
+            self.head = AttnPoolHead(
+                d_model=self.dim,         # <-- hidden dim from backbone
                 num_labels=num_labels,
-                n_tokens=n_tokens,
+                n_queries=4,
+                nheads=tf_heads,          # use your args
                 depth=tf_depth,
-                nheads=tf_heads,
+                dropout=0.3,
                 mlp_ratio=tf_mlp_ratio,
-                dropout=tf_dropout,
+                add_final_mlp=True,
             )
         else:
             raise ValueError(f"Unknown head_type={head_type}")
@@ -205,6 +278,24 @@ class SurgicalDINOForCVS(nn.Module):
         self.head_type = head_type
         pos_weight = torch.tensor([6.80, 3.04, 5.44], dtype=torch.float32)
         self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        
+    def _debug_feats(self, feats, pixel_values):
+        B, C, H, W = pixel_values.shape
+        print(f"[DEBUG] input: B={B} C={C} H={H} W={W}")
+
+        print(f"[DEBUG] num feats (layers returned) = {len(feats)}")
+        for i, (patch, cls) in enumerate(feats):
+            # patch: (B, N, D)   cls: (B, D)
+            print(f"[DEBUG] layer[{i}] patch={tuple(patch.shape)} cls={tuple(cls.shape)} "
+                f"patch_nan={torch.isnan(patch).any().item()} cls_nan={torch.isnan(cls).any().item()}")
+
+        # token sanity check (only if you set it)
+        if hasattr(self, "n_tokens_expected"):
+            N = feats[-1][0].shape[1]
+            if N != self.n_tokens_expected:
+                print(f"[WARN] Expected N={self.n_tokens_expected} tokens for img_size={H} "
+                    f"patch_size={self.n_tokens_expected**0.5}??, got N={N}. "
+                    f"Likely due to resize/crop or img_size mismatch.")
 
     def _reset_lora(self):
         for wA in self.w_As:
@@ -220,8 +311,7 @@ class SurgicalDINOForCVS(nn.Module):
             return_class_token=True,
             norm=False,
         )
-        # feats: list of tuples [(patch_tokens, cls_token), ...]
-
+        # feats: list of tuples (B,N=(224/16)*(224/16),D)
         if self.head_type == "mlp":
             # CLS-based
             if self.use_layers == "4":
@@ -231,10 +321,8 @@ class SurgicalDINOForCVS(nn.Module):
 
             logits = self.head(cls)
             emb = cls
-
         else:
             # Transformer-based (patch tokens)
-            # Use the LAST layer patch tokens (most standard).
             patch = feats[-1][0]  # (B, N, dim)
             logits = self.head(patch)
             emb = patch.mean(dim=1)  # lightweight embedding for logging
@@ -262,9 +350,6 @@ if __name__ == "__main__":
     ).to(device)
 
     surgicaldino.train()
-    
-    num_params = sum(p.numel() for p in surgicaldino.parameters())
-    print(num_params)
 
     x = torch.randn(2, 3, 224, 224, device=device)
     y = torch.randint(0, 2, (2, 3), device=device)  # multi-label (B,3) in {0,1}

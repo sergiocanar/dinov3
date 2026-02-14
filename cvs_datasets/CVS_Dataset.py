@@ -31,7 +31,6 @@ def move_last_n_videos(train_frames_dir: str, train_labels_dir: str, data_dir: s
 
     print(f"[OK] moved {len(video_names)} videos train -> val")
 
-
 class CVSData(Dataset):
     """Dataloader that returns annotated frames and their
     corresponding labels (majority), video names, and frame ids.
@@ -80,7 +79,7 @@ class CVSData(Dataset):
         ca_c1 = self.confidence_multiplexed_majority_vote(label_df, "c1",confidences)
         ca_c2 = self.confidence_multiplexed_majority_vote(label_df, "c2",confidences)
         ca_c3 = self.confidence_multiplexed_majority_vote(label_df, "c3",confidences)
-        label = torch.as_tensor([c1, c2, c3], dtype=torch.float32)
+        label = torch.as_tensor([ca_c1, ca_c2, ca_c3], dtype=torch.float32)
 
         # Apply transformations to the image
         if self.transform:
