@@ -1,0 +1,110 @@
+# Continued SSL pretraining of DINOv3 ViT-L/16 on GastroHUN H. Pylori sequences.
+# Single GPU (48 GB), proof-of-concept: 10-second window around keyframes.
+#
+# Launch:
+#   python dinov3/train/train.py \
+#       --config-file dinov3/configs/train/gastro_hun_vitl16_ssl.yaml \
+#       --output-dir outputs/gastro_ssl_vitl
+
+student:
+  arch: vit_large
+  patch_size: 16
+  drop_path_rate: 0.2
+  layerscale: 1.0e-05
+  pretrained_weights: ''
+  resume_from_teacher_chkpt: /home/scanar/endovis/models/dinov3/weights/dinov3_vitl16_pretrain_ssl_format.pth
+  ffn_layer: mlp
+  ffn_ratio: 4.0
+  qkv_bias: true
+  proj_bias: true
+  ffn_bias: true
+  norm_layer: layernorm
+  pos_embed_type: rope
+  pos_embed_rope_base: 100.0
+  pos_embed_rope_dtype: bf16
+
+teacher:
+  momentum_teacher: 0.994
+  final_momentum_teacher: 1.0
+  warmup_teacher_temp: 0.04
+  teacher_temp: 0.07
+  warmup_teacher_temp_epochs: 3
+
+train:
+  # GastroHUN: use fold1 training split, 10 s window around keyframe at 15 fps
+  dataset_path: "GastroHUN:root=/home/scanar/endovis/Datasets/GrastroHUN_Hpylori:split=all:window_secs=10.0:fps=15.0"
+  batch_size_per_gpu: 64
+  num_workers: 8
+  OFFICIAL_EPOCH_LENGTH: 1250   # scheduling granularity; 10 epochs = 12500 iters
+  output_dir: outputs/gastro_ssl_vitl
+  saveckp_freq: 5               # save checkpoint every 5 scheduled epochs
+  seed: 42
+  checkpointing: true           # gradient checkpointing to fit 48 GB
+  checkpointing_full: false
+  compile: false                # disable torch.compile for single-GPU stability
+  cudagraphs: false
+  cache_dataset: false
+
+optim:
+  epochs: 10
+  optimizer: adamw
+  lr: 2.0e-04                   # reduced from default 1e-3 for continued pretraining
+  weight_decay: 0.04
+  weight_decay_end: 0.2
+  warmup_epochs: 2
+  min_lr: 1.0e-06
+  clip_grad: 3.0
+  freeze_last_layer_epochs: 1
+  scaling_rule: sqrt_wrt_1024
+  patch_embed_lr_mult: 0.2
+  layerwise_decay: 0.9
+  adamw_beta1: 0.9
+  adamw_beta2: 0.999
+
+crops:
+  global_crops_scale: [0.32, 1.0]
+  local_crops_number: 6           # reduced from 8 to ease single-GPU memory
+  local_crops_scale: [0.05, 0.32]
+  global_crops_size: 224
+  local_crops_size: 96
+  horizontal_flips: true
+  share_color_jitter: false
+  rgb_mean: [0.485, 0.456, 0.406]
+  rgb_std: [0.229, 0.224, 0.225]
+
+dino:
+  loss_weight: 1.0
+  head_n_prototypes: 65536
+  head_bottleneck_dim: 256
+  head_norm_last_layer: false
+  head_nlayers: 3
+  head_hidden_dim: 2048
+  koleo_loss_weight: 0.1
+
+ibot:
+  loss_weight: 1.0
+  separate_head: true
+  head_n_prototypes: 65536
+  head_bottleneck_dim: 256
+  head_norm_last_layer: false
+  head_nlayers: 3
+  head_hidden_dim: 2048
+  mask_sample_probability: 0.5
+  mask_ratio_min_max: [0.1, 0.5]
+
+gram:
+  use_loss: true
+  ema_teacher: true             # use EMA teacher as gram teacher (no separate ckpt needed)
+  it_load_ema_teacher: 0        # load EMA teacher into gram teacher from iteration 0
+  loss_weight: 1.0
+  rep_update: false             # ema_teacher and rep_update are mutually exclusive
+  normalized: true
+  tokens_used: all
+
+checkpointing:
+  period: 1250
+  max_to_keep: 3
+  keep_every: 999999999
+
+evaluation:
+  eval_period_iterations: 6250  # evaluate every 5 scheduled epochs

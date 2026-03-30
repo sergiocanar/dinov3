@@ -19,6 +19,6 @@ dist/
 
 #Project specific ignores
 *.pth
-data/
+/data/
 outputs/
 wandb/
