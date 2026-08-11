@@ -6,6 +6,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 # Adapted from: https://github.com/facebookresearch/detr/blob/master/models/detr.py
 
+from __future__ import annotations
 from typing import Optional
 import torch
 from torch import nn, Tensor

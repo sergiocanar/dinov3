@@ -23,6 +23,7 @@ Distributed checkpointer docs:
 - https://pytorch.org/tutorials/recipes/distributed_checkpoint_recipe.html
 - https://pytorch.org/docs/stable/distributed.checkpoint.html
 """
+from __future__ import annotations
 
 import logging
 import shutil

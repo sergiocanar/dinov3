@@ -3,6 +3,7 @@
 # This software may be used and distributed in accordance with
 # the terms of the DINOv3 License Agreement.
 
+from __future__ import annotations
 import numpy as np
 from PIL import Image
 from typing import Any, List, Optional, Sequence, Tuple, Union

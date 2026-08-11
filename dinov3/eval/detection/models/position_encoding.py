@@ -19,6 +19,7 @@
 """
 Various positional encodings for the transformer.
 """
+from __future__ import annotations
 import math
 from enum import Enum
 

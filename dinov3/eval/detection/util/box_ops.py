@@ -19,6 +19,7 @@
 """
 Utilities for bounding box manipulation and GIoU.
 """
+from __future__ import annotations
 import numpy as np
 import torch
 

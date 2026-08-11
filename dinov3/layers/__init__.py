@@ -3,6 +3,7 @@
 # This software may be used and distributed in accordance with
 # the terms of the DINOv3 License Agreement.
 
+from __future__ import annotations
 from .attention import CausalSelfAttention, LinearKMaskedBias, SelfAttention
 from .block import CausalSelfAttentionBlock, SelfAttentionBlock
 from .ffn_layers import Mlp, SwiGLUFFN

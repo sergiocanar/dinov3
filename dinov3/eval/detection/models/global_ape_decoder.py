@@ -9,6 +9,7 @@
 # Licensed under The MIT License [see LICENSE for details]
 # ------------------------------------------------------------------------
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint

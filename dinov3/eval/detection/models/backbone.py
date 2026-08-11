@@ -19,6 +19,7 @@
 """
 Backbone modules.
 """
+from __future__ import annotations
 import logging
 from typing import List, Optional, Union
 

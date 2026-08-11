@@ -4,6 +4,7 @@
 # the terms of the DINOv3 License Agreement.
 
 # Copyright (c) Facebook, Inc. and its affiliates.
+from __future__ import annotations
 import torch
 import torch.distributed as dist
 from torch import nn

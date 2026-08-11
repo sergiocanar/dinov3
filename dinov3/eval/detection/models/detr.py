@@ -19,6 +19,7 @@
 """
 Deformable DETR model and criterion classes.
 """
+from __future__ import annotations
 import math
 
 import torch

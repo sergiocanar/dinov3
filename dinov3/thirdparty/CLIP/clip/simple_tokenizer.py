@@ -6,6 +6,7 @@
 # References:
 #  https://github.com/openai/CLIP/blob/main/clip/simple_tokenizer.py
 
+from __future__ import annotations
 import gzip
 import html
 import os

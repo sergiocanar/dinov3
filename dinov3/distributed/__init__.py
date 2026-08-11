@@ -4,6 +4,7 @@
 # the terms of the DINOv3 License Agreement.
 
 # isort: skip_file
+from __future__ import annotations
 from .torch_distributed_wrapper import (
     disable_distributed as disable,
     enable_distributed as enable,

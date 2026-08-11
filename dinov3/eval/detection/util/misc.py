@@ -21,6 +21,7 @@ Misc functions, including distributed helpers.
 
 Mostly copy-paste from torchvision references.
 """
+from __future__ import annotations
 import copy
 from typing import List, Optional
 
